@@ -13,8 +13,8 @@ const demoPayments = new Map<string, any>();
 
 // Helper to check Mercado Pago Credentials
 function getMPConfig() {
-  const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
-  const publicKey = process.env.MERCADOPAGO_PUBLIC_KEY || "";
+  const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN || "APP_USR-6590395360723241-072718-e5347f510a815f5389bd335e2f462631-1268573698";
+  const publicKey = process.env.MERCADOPAGO_PUBLIC_KEY || "APP_USR-ba501be2-d89c-4952-89a8-e665b5dcbe30";
   return {
     accessToken,
     publicKey,
