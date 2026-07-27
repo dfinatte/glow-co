@@ -1,4 +1,4 @@
-import { ShoppingBag } from 'lucide-react';
+import { ShoppingBag, ShieldCheck } from 'lucide-react';
 import { useCart } from '@/context/CartContext';
 import { Link } from 'wouter';
 
@@ -9,7 +9,13 @@ export default function Header() {
   return (
     <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-md border-b border-border/50">
       <div className="max-w-[1200px] mx-auto px-4 h-[72px] flex items-center justify-between">
-        <div className="w-10"></div> {/* Spacer for center alignment */}
+        <Link
+          href="/admin"
+          className="p-2 w-10 h-10 flex items-center justify-center text-muted-foreground hover:text-primary transition-colors rounded-full hover:bg-muted/50"
+          title="Painel de Administração"
+        >
+          <ShieldCheck className="w-5 h-5" />
+        </Link>
         
         <Link href="/" className="text-2xl md:text-3xl font-serif tracking-widest text-foreground flex-1 text-center font-semibold cursor-pointer">
           GLOW & CO.

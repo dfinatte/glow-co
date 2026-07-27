@@ -4,9 +4,11 @@ import { CartProvider } from '@/context/CartContext';
 import Store from '@/pages/Store';
 import Checkout from '@/pages/Checkout';
 import ProductDetail from '@/pages/ProductDetail';
+import Admin from '@/pages/Admin';
 import NotFound from '@/pages/not-found';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import WhatsAppButton from '@/components/WhatsAppButton';
 
 const queryClient = new QueryClient();
 
@@ -19,10 +21,12 @@ function App() {
             <Switch>
               <Route path="/" component={Store} />
               <Route path="/checkout" component={Checkout} />
+              <Route path="/admin" component={Admin} />
               <Route path="/produto/:id" component={ProductDetail} />
               <Route component={NotFound} />
             </Switch>
           </WouterRouter>
+          <WhatsAppButton />
           <Toaster />
         </TooltipProvider>
       </CartProvider>
