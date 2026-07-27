@@ -1,0 +1,6 @@
+{
+  "name": "GLOW & CO. - Ollie Bastão 3 em 1",
+  "description": "Loja virtual de alta conversão para o Bastão Multifuncional Ollie 3 em 1 com FPS 95, ofertas de desconto progressivo e checkout PIX integrado.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
