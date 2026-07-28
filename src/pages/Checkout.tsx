@@ -97,6 +97,58 @@ function updateLocalOrderStatus(orderId: string, status: 'approved' | 'pending' 
   } catch (err) {}
 }
 
+async function createClientMercadoPagoPreference(orderId: string, items: any[], totalAmount: number, payer: any) {
+  const MP_ACCESS_TOKEN = 'APP_USR-6590395360723241-072718-e5347f510a815f5389bd335e2f462631-1268573698';
+
+  const mpItems = items.map((item) => ({
+    id: String(item.id || 'prod_glow'),
+    title: String(item.name || 'Produto Glow & Co.').slice(0, 250),
+    quantity: Number(item.quantity) || 1,
+    currency_id: 'BRL',
+    unit_price: Number(Number(item.price || 0).toFixed(2)),
+  }));
+
+  const origin = window.location.origin;
+
+  const body = {
+    items: mpItems,
+    payer: {
+      name: payer.name || 'Cliente',
+      email: (payer.email && payer.email.includes('@')) ? payer.email : 'cliente@glowco.com.br',
+    },
+    back_urls: {
+      success: `${origin}/checkout?status=approved&order_id=${orderId}`,
+      failure: `${origin}/checkout?status=failure&order_id=${orderId}`,
+      pending: `${origin}/checkout?status=pending&order_id=${orderId}`,
+    },
+    auto_return: 'approved',
+    external_reference: orderId,
+  };
+
+  try {
+    const res = await fetch('https://api.mercadopago.com/checkout/preferences', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${MP_ACCESS_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok) {
+      const resData = await res.json();
+      return resData.init_point || resData.sandbox_init_point || null;
+    } else {
+      const errorJson = await res.json().catch(() => ({}));
+      console.warn('Mercado Pago Direct Preference API Response:', res.status, errorJson);
+      return null;
+    }
+  } catch (err) {
+    console.error('Erro na requisição ao Mercado Pago:', err);
+    return null;
+  }
+}
+
 export default function Checkout() {
   const { cartItems, cartTotal, clearCart } = useCart();
   const [, setLocation] = useLocation();
@@ -128,7 +180,14 @@ export default function Checkout() {
     const statusParam = params.get('status') || params.get('collection_status');
     const orderIdParam = params.get('order_id') || params.get('external_reference');
 
-    if (orderIdParam) {
+    if (statusParam === 'approved' || statusParam === 'authorized') {
+      if (orderIdParam) {
+        updateLocalOrderStatus(orderIdParam, 'approved');
+      }
+      setSubmitted(true);
+      confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
+      clearCart();
+    } else if (orderIdParam) {
       fetch(`/api/mercadopago/payment-status/${orderIdParam}`)
         .then((res) => {
           const ct = res.headers.get('content-type') || '';
@@ -137,11 +196,7 @@ export default function Checkout() {
         })
         .then((data) => {
           if (data && data.status === 'approved') {
-            setSubmitted(true);
-            confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
-            clearCart();
-          } else if (statusParam === 'approved') {
-            // Also confirm if status param explicitly approved
+            updateLocalOrderStatus(orderIdParam, 'approved');
             setSubmitted(true);
             confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
             clearCart();
@@ -305,37 +360,9 @@ export default function Checkout() {
           setPixData(fallbackPix);
         }
       } else if (method === 'card') {
-        let data: any = null;
-        try {
-          const response = await fetch('/api/mercadopago/create-preference', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              totalAmount: totalToPay,
-              shippingCost,
-              payer: payerData,
-              address: addressData,
-              items: cartItems.map((i) => ({
-                id: i.id,
-                name: i.name,
-                quantity: i.quantity,
-                price: i.price,
-                image: i.image,
-                color: i.color,
-              })),
-            }),
-          });
+        const orderId = `ORD-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
 
-          const ct = response.headers.get('content-type') || '';
-          if (response.ok && ct.includes('application/json')) {
-            data = await response.json();
-          }
-        } catch (err) {
-          console.warn('Backend API Mercado Pago Cartão indisponível:', err);
-        }
-
-        const orderId = data?.orderId || `ord_card_${Date.now().toString().slice(-6)}`;
-
+        // Save order locally as pending
         saveOrderLocally({
           id: orderId,
           createdAt: new Date().toISOString(),
@@ -351,18 +378,62 @@ export default function Checkout() {
           })),
           totalAmount: totalToPay,
           paymentMethod: 'card',
-          paymentStatus: 'approved',
+          paymentStatus: 'pending',
         });
 
-        if (data && data.init_point) {
-          if (data.orderId) setCardOrderId(data.orderId);
-          window.location.href = data.init_point;
-        } else {
-          // Confirm card order smoothly on static host
+        let initPoint: string | null = null;
+
+        // Try direct Mercado Pago API first to prevent 404 errors on Netlify static host
+        try {
+          initPoint = await createClientMercadoPagoPreference(
+            orderId,
+            cartItems,
+            totalToPay,
+            payerData
+          );
+        } catch (clientMpErr) {
+          console.warn('Erro ao chamar Mercado Pago diretamente, tentando backend local:', clientMpErr);
+        }
+
+        // If direct API didn't return (or failed), try backend endpoint
+        if (!initPoint) {
+          try {
+            const response = await fetch('/api/mercadopago/create-preference', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                totalAmount: totalToPay,
+                shippingCost,
+                payer: payerData,
+                address: addressData,
+                items: cartItems.map((i) => ({
+                  id: i.id,
+                  name: i.name,
+                  quantity: i.quantity,
+                  price: i.price,
+                  image: i.image,
+                  color: i.color,
+                })),
+              }),
+            });
+
+            const ct = response.headers.get('content-type') || '';
+            if (response.ok && ct.includes('application/json')) {
+              const data = await response.json();
+              if (data && data.init_point) {
+                initPoint = data.init_point;
+              }
+            }
+          } catch (err) {
+            // Silently ignore static server response
+          }
+        }
+
+        if (initPoint) {
           setCardOrderId(orderId);
-          setSubmitted(true);
-          confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
-          clearCart();
+          window.location.href = initPoint;
+        } else {
+          setPaymentError('Não foi possível conectar com o Mercado Pago para pagamento com cartão de crédito. Por favor, tente novamente ou escolha a opção PIX para desconto de 5%.');
         }
       }
     } catch (err: any) {
