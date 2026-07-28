@@ -146,6 +146,16 @@ app.get("/api/admin/orders", (_req, res) => {
   res.json(allOrders);
 });
 
+// Sync order from client
+app.post("/api/admin/sync-order", (req, res) => {
+  const order = req.body as Order;
+  if (order && order.id) {
+    ordersMap.set(order.id, order);
+    return res.json({ message: "Order synced", order });
+  }
+  res.status(400).json({ error: "Invalid order data" });
+});
+
 // 3. POST /api/admin/orders/:id/approve - Admin manually approves PIX or pending order
 app.post("/api/admin/orders/:id/approve", (req, res) => {
   const { id } = req.params;

@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
+import { saveOrderToFirestore, subscribeToSingleOrder, Order } from '../services/orderService';
 
 interface PixResponse {
   id: string;
@@ -306,13 +307,23 @@ export default function Checkout() {
     }
   }, [pixData]);
 
-  // Poll status every 2.5s for pending orders (both local Admin approvals and backend)
+  // Listen to Firestore real-time updates for the pending order
   useEffect(() => {
     const activeId = pixData?.orderId || pixData?.id || cardOrderId;
     if (!activeId || submitted) return;
 
+    // 1. Subscribe directly to Firestore document for real-time approval detection
+    const unsub = subscribeToSingleOrder(activeId, (orderDoc) => {
+      if (orderDoc && orderDoc.paymentStatus === 'approved') {
+        setSubmitted(true);
+        confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
+        clearCart();
+        localStorage.removeItem('glow_active_pix');
+      }
+    });
+
+    // 2. Secondary fallback check via server endpoint / local storage
     const interval = setInterval(async () => {
-      // 1. Check local order status (e.g. approved in Admin panel)
       try {
         const savedOrders = localStorage.getItem('glow_orders');
         if (savedOrders) {
@@ -330,7 +341,6 @@ export default function Checkout() {
         }
       } catch (err) {}
 
-      // 2. Check server status if endpoint available
       try {
         const res = await fetch(`/api/mercadopago/payment-status/${activeId}`);
         const ct = res.headers.get('content-type') || '';
@@ -344,12 +354,13 @@ export default function Checkout() {
             localStorage.removeItem('glow_active_pix');
           }
         }
-      } catch (err) {
-        // Silently ignore static server response
-      }
+      } catch (err) {}
     }, 2500);
 
-    return () => clearInterval(interval);
+    return () => {
+      unsub();
+      clearInterval(interval);
+    };
   }, [pixData, cardOrderId, submitted, clearCart]);
 
   const formatTime = (seconds: number) => {
@@ -412,7 +423,7 @@ export default function Checkout() {
       if (method === 'pix') {
         const orderId = `ord_${Date.now().toString().slice(-6)}`;
         
-        saveOrderLocally({
+        const newOrderObj: Order = {
           id: orderId,
           createdAt: new Date().toISOString(),
           customer: payerData,
@@ -429,7 +440,10 @@ export default function Checkout() {
           paymentMethod: 'pix',
           paymentStatus: 'pending',
           pixKeyUsed: '55839369837',
-        });
+        };
+
+        // Save order in Firestore so Admin page updates in real-time
+        await saveOrderToFirestore(newOrderObj);
 
         // Direct Client-side PIX Payload (100% valid EMV BR Code)
         const pixCode = generateClientPixPayload('55839369837', totalToPay, name || 'GLOW AND CO', 'SAO PAULO', orderId);
@@ -448,8 +462,7 @@ export default function Checkout() {
       } else if (method === 'card') {
         const orderId = `ORD-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
 
-        // Save order locally as pending
-        saveOrderLocally({
+        const newOrderObj: Order = {
           id: orderId,
           createdAt: new Date().toISOString(),
           customer: payerData,
@@ -465,7 +478,10 @@ export default function Checkout() {
           totalAmount: totalToPay,
           paymentMethod: 'card',
           paymentStatus: 'pending',
-        });
+        };
+
+        // Save order in Firestore so Admin page updates in real-time
+        await saveOrderToFirestore(newOrderObj);
 
         let initPoint: string | null = null;
 

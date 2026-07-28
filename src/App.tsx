@@ -12,8 +12,8 @@ import WhatsAppButton from '@/components/WhatsAppButton';
 
 const queryClient = new QueryClient();
 
-const baseUrl = import.meta.env.BASE_URL && import.meta.env.BASE_URL !== '/' 
-  ? import.meta.env.BASE_URL.replace(/\/$/, '') 
+const baseUrl = (import.meta as any).env?.BASE_URL && (import.meta as any).env?.BASE_URL !== '/' 
+  ? (import.meta as any).env.BASE_URL.replace(/\/$/, '') 
   : undefined;
 
 function App() {

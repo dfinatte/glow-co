@@ -20,38 +20,13 @@ import {
   Check,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-
-interface OrderItem {
-  id: string | number;
-  name: string;
-  quantity: number;
-  price: number;
-  image?: string;
-  color?: string;
-}
-
-interface Order {
-  id: string;
-  createdAt: string;
-  customer: {
-    name: string;
-    email: string;
-    phone: string;
-    cpf: string;
-  };
-  address: {
-    cep: string;
-    street: string;
-    number: string;
-    complement?: string;
-  };
-  items: OrderItem[];
-  totalAmount: number;
-  paymentMethod: "pix" | "card";
-  paymentStatus: "pending" | "approved" | "rejected";
-  mpPaymentId?: string;
-  pixKeyUsed?: string;
-}
+import {
+  Order,
+  subscribeToOrders,
+  approveOrderInFirestore,
+  deleteOrderFromFirestore,
+  fetchAllOrders,
+} from "../services/orderService";
 
 export default function Admin() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -61,80 +36,45 @@ export default function Admin() {
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const fetchOrders = async () => {
+  useEffect(() => {
     setLoading(true);
-    let apiOrders: Order[] = [];
-    try {
-      const res = await fetch("/api/admin/orders");
-      const ct = res.headers.get("content-type") || "";
-      if (res.ok && ct.includes("application/json")) {
-        apiOrders = await res.json();
-      }
-    } catch (err) {
-      console.warn("API de ordens indisponível, usando localStorage:", err);
-    }
+    // Subscribe in real-time to Firestore orders collection
+    const unsubscribe = subscribeToOrders((newOrders) => {
+      setOrders(newOrders);
+      setLoading(false);
+    });
 
-    let localOrders: Order[] = [];
-    try {
-      const stored = localStorage.getItem("glow_orders");
-      if (stored) localOrders = JSON.parse(stored);
-    } catch (e) {}
+    return () => unsubscribe();
+  }, []);
 
-    const orderMap = new Map<string, Order>();
-    localOrders.forEach((o) => orderMap.set(o.id, o));
-    apiOrders.forEach((o) => orderMap.set(o.id, o));
-
-    const merged = Array.from(orderMap.values()).sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
-
-    setOrders(merged);
+  const handleManualRefresh = async () => {
+    setLoading(true);
+    const fetched = await fetchAllOrders();
+    setOrders(fetched);
     setLoading(false);
   };
-
-  useEffect(() => {
-    fetchOrders();
-    const interval = setInterval(fetchOrders, 5000);
-    return () => clearInterval(interval);
-  }, []);
 
   const handleApprove = async (orderId: string) => {
     setApprovingId(orderId);
     try {
-      await fetch(`/api/admin/orders/${orderId}/approve`, {
-        method: "POST",
-      });
-    } catch (err) {}
-
-    setOrders((prev) => {
-      const updated = prev.map((o) =>
-        o.id === orderId ? { ...o, paymentStatus: "approved" as const } : o
-      );
-      try {
-        localStorage.setItem("glow_orders", JSON.stringify(updated));
-      } catch (e) {}
-      return updated;
-    });
-    setApprovingId(null);
+      await approveOrderInFirestore(orderId);
+    } catch (err) {
+      console.error("Erro ao aprovar ordem:", err);
+    } finally {
+      setApprovingId(null);
+    }
   };
 
   const handleDelete = async (orderId: string) => {
     if (!confirm("Tem certeza que deseja remover este pedido?")) return;
     setDeletingId(orderId);
     try {
-      await fetch(`/api/admin/orders/${orderId}`, {
-        method: "DELETE",
-      });
-    } catch (err) {}
-
-    setOrders((prev) => {
-      const updated = prev.filter((o) => o.id !== orderId);
-      try {
-        localStorage.setItem("glow_orders", JSON.stringify(updated));
-      } catch (e) {}
-      return updated;
-    });
-    setDeletingId(null);
+      await deleteOrderFromFirestore(orderId);
+    } catch (err) {
+      console.error("Erro ao excluir ordem:", err);
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const filteredOrders = orders.filter((order) => {
@@ -179,7 +119,7 @@ export default function Admin() {
           </div>
 
           <button
-            onClick={fetchOrders}
+            onClick={handleManualRefresh}
             className="flex items-center gap-2 bg-muted hover:bg-muted/80 text-foreground px-4 py-2.5 rounded-xl text-xs font-bold transition-all self-start md:self-auto"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin text-primary" : ""}`} />
