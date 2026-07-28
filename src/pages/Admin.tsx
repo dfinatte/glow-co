@@ -11,13 +11,15 @@ import {
   Phone,
   Mail,
   MapPin,
-  User,
+  User as UserIcon,
   CreditCard,
   QrCode,
   DollarSign,
   ArrowLeft,
   Trash2,
   Check,
+  LogIn,
+  LogOut,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -27,8 +29,10 @@ import {
   deleteOrderFromFirestore,
   fetchAllOrders,
 } from "../services/orderService";
+import { useAuth } from "../context/AuthContext";
 
 export default function Admin() {
+  const { user, loginWithGoogle, logout } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -118,13 +122,50 @@ export default function Admin() {
             </div>
           </div>
 
-          <button
-            onClick={handleManualRefresh}
-            className="flex items-center gap-2 bg-muted hover:bg-muted/80 text-foreground px-4 py-2.5 rounded-xl text-xs font-bold transition-all self-start md:self-auto"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin text-primary" : ""}`} />
-            Atualizar Pedidos
-          </button>
+          <div className="flex items-center gap-3">
+            {user && !user.isAnonymous ? (
+              <div className="flex items-center gap-2 bg-muted/80 px-3 py-1.5 rounded-2xl text-xs">
+                {user.photoURL ? (
+                  <img src={user.photoURL} alt={user.displayName || 'Admin'} className="w-6 h-6 rounded-full" />
+                ) : (
+                  <div className="w-6 h-6 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-xs">
+                    {user.displayName?.[0] || 'A'}
+                  </div>
+                )}
+                <div className="flex flex-col text-left">
+                  <span className="font-semibold text-foreground text-xs leading-tight">
+                    {user.displayName || 'Admin Conectado'}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">
+                    {user.email}
+                  </span>
+                </div>
+                <button
+                  onClick={logout}
+                  title="Sair"
+                  className="ml-1 p-1 text-muted-foreground hover:text-destructive transition-colors"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => loginWithGoogle()}
+                className="flex items-center gap-2 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 px-3.5 py-2 rounded-xl text-xs font-bold transition-all"
+              >
+                <LogIn className="w-4 h-4" />
+                Entrar com Google
+              </button>
+            )}
+
+            <button
+              onClick={handleManualRefresh}
+              className="flex items-center gap-2 bg-muted hover:bg-muted/80 text-foreground px-4 py-2.5 rounded-xl text-xs font-bold transition-all"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin text-primary" : ""}`} />
+              Atualizar Pedidos
+            </button>
+          </div>
         </div>
 
         {/* Metrics Cards */}
@@ -298,7 +339,7 @@ export default function Admin() {
                     {/* Customer */}
                     <div className="space-y-2 text-xs">
                       <div className="flex items-center gap-2 font-bold text-foreground text-sm border-b border-border/40 pb-1.5">
-                        <User className="w-4 h-4 text-primary" />
+                        <UserIcon className="w-4 h-4 text-primary" />
                         Dados do Cliente
                       </div>
                       <p className="font-semibold text-foreground text-sm">{order.customer.name}</p>

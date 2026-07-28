@@ -1,5 +1,13 @@
 import { initializeApp, getApps } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut as firebaseSignOut,
+  onAuthStateChanged,
+  signInAnonymously,
+  User,
+} from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -7,6 +15,48 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0
 
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+export const googleProvider = new GoogleAuthProvider();
+
+// Ensure user is signed in (anonymously if not logged in with Google)
+export async function ensureAuth(): Promise<User | null> {
+  if (auth.currentUser) return auth.currentUser;
+
+  return new Promise((resolve) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      unsubscribe();
+      if (user) {
+        resolve(user);
+      } else {
+        try {
+          const anonCred = await signInAnonymously(auth);
+          resolve(anonCred.user);
+        } catch (err) {
+          console.warn('SignInAnonymously failed or disabled:', err);
+          resolve(null);
+        }
+      }
+    });
+  });
+}
+
+export async function loginWithGoogle() {
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    return result.user;
+  } catch (error) {
+    console.error('Erro ao fazer login com Google:', error);
+    throw error;
+  }
+}
+
+export async function logoutUser() {
+  try {
+    await firebaseSignOut(auth);
+    await signInAnonymously(auth).catch(() => {});
+  } catch (error) {
+    console.error('Erro ao sair:', error);
+  }
+}
 
 export enum OperationType {
   CREATE = 'create',
@@ -26,11 +76,6 @@ export interface FirestoreErrorInfo {
     email?: string | null;
     emailVerified?: boolean | null;
     isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
   };
 }
 
@@ -42,15 +87,10 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
       email: auth.currentUser?.email,
       emailVerified: auth.currentUser?.emailVerified,
       isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map((provider) => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || [],
     },
     operationType,
     path,
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  console.error('Firestore Error:', JSON.stringify(errInfo));
   return new Error(JSON.stringify(errInfo));
 }

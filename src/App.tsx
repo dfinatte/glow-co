@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Route, Switch, Router as WouterRouter } from 'wouter';
 import { CartProvider } from '@/context/CartContext';
+import { AuthProvider } from '@/context/AuthContext';
 import Store from '@/pages/Store';
 import Checkout from '@/pages/Checkout';
 import ProductDetail from '@/pages/ProductDetail';
@@ -19,32 +20,34 @@ const baseUrl = (import.meta as any).env?.BASE_URL && (import.meta as any).env?.
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <CartProvider>
-        <TooltipProvider>
-          <WouterRouter base={baseUrl}>
-            <Switch>
-              <Route path="/" component={Store} />
-              <Route path="/checkout" component={Checkout} />
-              <Route path="/checkout/*" component={Checkout} />
-              <Route path="/carrinho" component={Checkout} />
-              <Route path="/carrinho/*" component={Checkout} />
-              <Route path="/cart" component={Checkout} />
-              <Route path="/admin" component={Admin} />
-              <Route path="/admin/*" component={Admin} />
-              <Route path="/painel" component={Admin} />
-              <Route path="/painel/*" component={Admin} />
-              <Route path="/dashboard" component={Admin} />
-              <Route path="/dashboard/*" component={Admin} />
-              <Route path="/produto/:id" component={ProductDetail} />
-              <Route path="/product/:id" component={ProductDetail} />
-              <Route path="/produtos/:id" component={ProductDetail} />
-              <Route component={NotFound} />
-            </Switch>
-          </WouterRouter>
-          <WhatsAppButton />
-          <Toaster />
-        </TooltipProvider>
-      </CartProvider>
+      <AuthProvider>
+        <CartProvider>
+          <TooltipProvider>
+            <WouterRouter base={baseUrl}>
+              <Switch>
+                <Route path="/" component={Store} />
+                <Route path="/checkout" component={Checkout} />
+                <Route path="/checkout/*" component={Checkout} />
+                <Route path="/carrinho" component={Checkout} />
+                <Route path="/carrinho/*" component={Checkout} />
+                <Route path="/cart" component={Checkout} />
+                <Route path="/admin" component={Admin} />
+                <Route path="/admin/*" component={Admin} />
+                <Route path="/painel" component={Admin} />
+                <Route path="/painel/*" component={Admin} />
+                <Route path="/dashboard" component={Admin} />
+                <Route path="/dashboard/*" component={Admin} />
+                <Route path="/produto/:id" component={ProductDetail} />
+                <Route path="/product/:id" component={ProductDetail} />
+                <Route path="/produtos/:id" component={ProductDetail} />
+                <Route component={NotFound} />
+              </Switch>
+            </WouterRouter>
+            <WhatsAppButton />
+            <Toaster />
+          </TooltipProvider>
+        </CartProvider>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }
