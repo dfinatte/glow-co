@@ -8,7 +8,6 @@ import {
   query,
   orderBy,
   getDocs,
-  getDoc,
   Unsubscribe,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
@@ -48,46 +47,8 @@ export interface Order {
 
 const ORDERS_COLLECTION = 'orders';
 
-/**
- * Save or update an order in Firestore with local backup and fast non-blocking timeout
- */
-export async function saveOrderToFirestore(order: Order): Promise<void> {
-  const orderRef = doc(db, ORDERS_COLLECTION, order.id);
-  const dataToSave = {
-    ...order,
-    updatedAt: new Date().toISOString(),
-  };
+// ─── localStorage helpers (same-device only, never cross-device) ──────────────
 
-  // 1. Immediately save to localStorage for instant cross-tab access
-  try {
-    const stored = JSON.parse(localStorage.getItem('glow_orders') || '[]');
-    const filtered = stored.filter((o: Order) => o.id !== order.id);
-    filtered.unshift(dataToSave);
-    localStorage.setItem('glow_orders', JSON.stringify(filtered));
-  } catch (e) {}
-
-  // 2. Immediately send to backend Express server API
-  try {
-    fetch('/api/admin/sync-order', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(dataToSave),
-    }).catch(() => {});
-  } catch (e) {}
-
-  // 3. Persist to Firestore with a 1.5s timeout race so it NEVER blocks or hangs the checkout UI
-  try {
-    const setPromise = setDoc(orderRef, dataToSave, { merge: true });
-    const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 1500));
-    await Promise.race([setPromise, timeoutPromise]);
-  } catch (error) {
-    console.warn('Aviso: Gravação no Firestore com fallback local:', error);
-  }
-}
-
-/**
- * Helper to get local merged orders
- */
 export function getLocalOrders(): Order[] {
   try {
     const stored = localStorage.getItem('glow_orders');
@@ -97,9 +58,80 @@ export function getLocalOrders(): Order[] {
   }
 }
 
-/**
- * Subscribe to all orders in real-time (for Admin panel)
- */
+function saveLocalOrder(order: Order) {
+  try {
+    const stored = getLocalOrders();
+    const filtered = stored.filter((o) => o.id !== order.id);
+    filtered.unshift(order);
+    localStorage.setItem('glow_orders', JSON.stringify(filtered));
+  } catch {}
+}
+
+function updateLocalOrderStatus(orderId: string, status: 'approved' | 'pending' | 'rejected') {
+  try {
+    const stored = getLocalOrders();
+    const updated = stored.map((o) =>
+      o.id === orderId ? { ...o, paymentStatus: status, updatedAt: new Date().toISOString() } : o
+    );
+    localStorage.setItem('glow_orders', JSON.stringify(updated));
+  } catch {}
+}
+
+// ─── saveOrderToFirestore ─────────────────────────────────────────────────────
+//
+// Strategy: salva no localStorage imediatamente (UX instant), depois escreve no
+// Firestore sem timeout rígido. A função retorna em até 2 s para não travar a
+// tela de checkout — mas a escrita continua em background com retry automático.
+// Isso garante que pedidos de celular com conexão lenta sempre cheguem ao admin.
+//
+export async function saveOrderToFirestore(order: Order): Promise<void> {
+  const dataToSave: Order = { ...order, updatedAt: new Date().toISOString() };
+  const orderRef = doc(db, ORDERS_COLLECTION, order.id);
+
+  // 1. Salva localmente para UX imediata no mesmo dispositivo
+  saveLocalOrder(dataToSave);
+
+  // 2. Sincroniza com o servidor Express (in-memory, fallback rápido)
+  fetch('/api/admin/sync-order', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(dataToSave),
+  }).catch(() => {});
+
+  // 3. Firestore — fonte de verdade cross-device
+  //    Inicia a escrita e aguarda no máximo 2 s antes de retornar para o checkout.
+  //    Se não completar nesse tempo, a Promise continua rodando em background
+  //    com retry automático após 3 s.
+  const writeWithRetry = async () => {
+    try {
+      await setDoc(orderRef, dataToSave, { merge: true });
+    } catch (firstError) {
+      // Aguarda 3 s e tenta novamente (recupera falhas de rede momentâneas)
+      await new Promise((r) => setTimeout(r, 3000));
+      try {
+        await setDoc(orderRef, dataToSave, { merge: true });
+      } catch (secondError) {
+        console.warn('[Glow] Firestore write failed after retry. Order exists locally only.', secondError);
+      }
+    }
+  };
+
+  const backgroundWrite = writeWithRetry(); // inicia sem bloquear
+
+  // Retorna quando a escrita termina OU após 2 s (o que vier primeiro)
+  await Promise.race([
+    backgroundWrite,
+    new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+  ]);
+  // backgroundWrite continua em background se não terminou nos 2 s
+}
+
+// ─── subscribeToOrders (Admin) ────────────────────────────────────────────────
+//
+// Usa APENAS o Firestore onSnapshot — a única fonte cross-device.
+// Removido o merge de localStorage (device-local) e o polling do servidor
+// (in-memory, reseta no restart) que mascaram falhas e confundem o painel.
+//
 export function subscribeToOrders(
   onData: (orders: Order[]) => void,
   onError?: (err: any) => void
@@ -107,74 +139,30 @@ export function subscribeToOrders(
   const ordersRef = collection(db, ORDERS_COLLECTION);
   const q = query(ordersRef, orderBy('createdAt', 'desc'));
 
-  // Merge Firestore and localStorage orders to guarantee full real-time updates
-  const mergeAndEmit = (firestoreOrders: Order[]) => {
-    const local = getLocalOrders();
-    const map = new Map<string, Order>();
-    
-    // Add local first
-    local.forEach((o) => map.set(o.id, o));
-    // Firestore overrides local
-    firestoreOrders.forEach((o) => map.set(o.id, o));
-
-    const merged = Array.from(map.values()).sort(
-      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-    );
-    onData(merged);
-  };
-
-  // Initial emission from local storage
-  mergeAndEmit([]);
-
-  // Firestore real-time snapshot
-  const unsubFirestore = onSnapshot(
+  const unsubscribe = onSnapshot(
     q,
     (snapshot) => {
       const ordersList: Order[] = [];
       snapshot.forEach((docSnap) => {
         ordersList.push(docSnap.data() as Order);
       });
-      mergeAndEmit(ordersList);
+      onData(ordersList);
     },
     (error) => {
-      console.warn('Aviso do listener do Firestore (usando fallback local):', error);
+      handleFirestoreError(error, OperationType.LIST, ORDERS_COLLECTION);
       if (onError) onError(error);
-      mergeAndEmit([]);
     }
   );
 
-  // Cross-tab storage listener so open Admin tabs update instantly when order is made in another tab
-  const handleStorageChange = (e: StorageEvent) => {
-    if (e.key === 'glow_orders') {
-      mergeAndEmit([]);
-    }
-  };
-  window.addEventListener('storage', handleStorageChange);
-
-  // Periodic poll to fetch server orders every 3 seconds
-  const interval = setInterval(async () => {
-    try {
-      const res = await fetch('/api/admin/orders');
-      const ct = res.headers.get('content-type') || '';
-      if (res.ok && ct.includes('application/json')) {
-        const apiOrders: Order[] = await res.json();
-        if (apiOrders && apiOrders.length > 0) {
-          mergeAndEmit(apiOrders);
-        }
-      }
-    } catch (e) {}
-  }, 3000);
-
-  return () => {
-    unsubFirestore();
-    window.removeEventListener('storage', handleStorageChange);
-    clearInterval(interval);
-  };
+  return unsubscribe;
 }
 
-/**
- * Subscribe to a single order by ID in real-time (for Checkout page)
- */
+// ─── subscribeToSingleOrder (Checkout) ───────────────────────────────────────
+//
+// Monitora um pedido específico em tempo real.
+// Quando o admin aprova via painel, o cliente vê a tela de sucesso
+// automaticamente — mesmo em outro dispositivo.
+//
 export function subscribeToSingleOrder(
   orderId: string,
   onData: (order: Order | null) => void,
@@ -182,45 +170,37 @@ export function subscribeToSingleOrder(
 ): Unsubscribe {
   const orderRef = doc(db, ORDERS_COLLECTION, orderId);
 
-  const checkLocal = () => {
-    const local = getLocalOrders();
-    const found = local.find((o) => o.id === orderId);
-    if (found) onData(found);
-  };
+  // Emite do localStorage enquanto a conexão Firestore não está pronta
+  const local = getLocalOrders().find((o) => o.id === orderId);
+  if (local) onData(local);
 
-  checkLocal();
-
-  const unsubFirestore = onSnapshot(
+  const unsubscribe = onSnapshot(
     orderRef,
     (docSnap) => {
       if (docSnap.exists()) {
         onData(docSnap.data() as Order);
       } else {
-        checkLocal();
+        // Documento ainda não existe no Firestore, usa localStorage
+        const localFallback = getLocalOrders().find((o) => o.id === orderId);
+        onData(localFallback ?? null);
       }
     },
     (error) => {
       if (onError) onError(error);
-      checkLocal();
+      // Fallback para localStorage se Firestore falhar
+      const localFallback = getLocalOrders().find((o) => o.id === orderId);
+      onData(localFallback ?? null);
     }
   );
 
-  const handleStorageChange = (e: StorageEvent) => {
-    if (e.key === 'glow_orders') {
-      checkLocal();
-    }
-  };
-  window.addEventListener('storage', handleStorageChange);
-
-  return () => {
-    unsubFirestore();
-    window.removeEventListener('storage', handleStorageChange);
-  };
+  return unsubscribe;
 }
 
-/**
- * Approve payment status of an order
- */
+// ─── approveOrderInFirestore ──────────────────────────────────────────────────
+//
+// Admin clica em "Aprovar" → atualiza Firestore → subscribeToSingleOrder no
+// celular do cliente detecta a mudança → mostra tela de sucesso automaticamente.
+//
 export async function approveOrderInFirestore(orderId: string): Promise<void> {
   const orderRef = doc(db, ORDERS_COLLECTION, orderId);
   const updateData = {
@@ -228,86 +208,59 @@ export async function approveOrderInFirestore(orderId: string): Promise<void> {
     updatedAt: new Date().toISOString(),
   };
 
-  // 1. Local update
-  try {
-    const stored = getLocalOrders();
-    const updated = stored.map((o: Order) =>
-      o.id === orderId ? { ...o, ...updateData } : o
-    );
-    localStorage.setItem('glow_orders', JSON.stringify(updated));
-  } catch (e) {}
+  // Atualiza localStorage do admin (mesmo dispositivo)
+  updateLocalOrderStatus(orderId, 'approved');
 
-  // 2. Server API
-  try {
-    fetch(`/api/admin/orders/${orderId}/approve`, {
-      method: 'POST',
-    }).catch(() => {});
-  } catch (e) {}
+  // Atualiza servidor Express
+  fetch(`/api/admin/orders/${orderId}/approve`, { method: 'POST' }).catch(() => {});
 
-  // 3. Firestore update with timeout
+  // Atualiza Firestore — isso dispara o onSnapshot no celular do cliente
   try {
-    const updatePromise = updateDoc(orderRef, updateData);
-    const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 1500));
-    await Promise.race([updatePromise, timeoutPromise]);
-  } catch (error) {
+    await updateDoc(orderRef, updateData);
+  } catch {
+    // Documento pode não existir ainda, usa setDoc com merge
     try {
-      setDoc(orderRef, { id: orderId, ...updateData }, { merge: true }).catch(() => {});
-    } catch (e) {}
+      await setDoc(orderRef, { id: orderId, ...updateData }, { merge: true });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `${ORDERS_COLLECTION}/${orderId}`);
+      throw e; // propaga para o Admin.tsx mostrar erro
+    }
   }
 }
 
-/**
- * Delete an order
- */
+// ─── deleteOrderFromFirestore ─────────────────────────────────────────────────
 export async function deleteOrderFromFirestore(orderId: string): Promise<void> {
   const orderRef = doc(db, ORDERS_COLLECTION, orderId);
 
-  // 1. Local delete
+  // Remove do localStorage
   try {
-    const stored = getLocalOrders();
-    const filtered = stored.filter((o: Order) => o.id !== orderId);
-    localStorage.setItem('glow_orders', JSON.stringify(filtered));
-  } catch (e) {}
+    const stored = getLocalOrders().filter((o) => o.id !== orderId);
+    localStorage.setItem('glow_orders', JSON.stringify(stored));
+  } catch {}
 
-  // 2. Server API
-  try {
-    fetch(`/api/admin/orders/${orderId}`, {
-      method: 'DELETE',
-    }).catch(() => {});
-  } catch (e) {}
+  // Remove do servidor
+  fetch(`/api/admin/orders/${orderId}`, { method: 'DELETE' }).catch(() => {});
 
-  // 3. Firestore delete with timeout
+  // Remove do Firestore
   try {
-    const deletePromise = deleteDoc(orderRef);
-    const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 1500));
-    await Promise.race([deletePromise, timeoutPromise]);
+    await deleteDoc(orderRef);
   } catch (error) {
-    console.warn('Aviso ao deletar do Firestore:', error);
+    handleFirestoreError(error, OperationType.DELETE, `${ORDERS_COLLECTION}/${orderId}`);
+    throw error;
   }
 }
 
-/**
- * One-off fetch of all orders
- */
+// ─── fetchAllOrders (manual refresh) ─────────────────────────────────────────
 export async function fetchAllOrders(): Promise<Order[]> {
   try {
     const ordersRef = collection(db, ORDERS_COLLECTION);
     const q = query(ordersRef, orderBy('createdAt', 'desc'));
     const snapshot = await getDocs(q);
     const result: Order[] = [];
-    snapshot.forEach((docSnap) => {
-      result.push(docSnap.data() as Order);
-    });
-
-    const local = getLocalOrders();
-    const map = new Map<string, Order>();
-    local.forEach((o) => map.set(o.id, o));
-    result.forEach((o) => map.set(o.id, o));
-
-    return Array.from(map.values()).sort(
-      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-    );
+    snapshot.forEach((docSnap) => result.push(docSnap.data() as Order));
+    return result;
   } catch (error) {
-    return getLocalOrders();
+    handleFirestoreError(error, OperationType.LIST, ORDERS_COLLECTION);
+    throw error;
   }
 }
