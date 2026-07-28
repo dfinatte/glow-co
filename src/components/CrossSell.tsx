@@ -59,24 +59,16 @@ export default function CrossSell() {
                 {product.name}
               </h3>
 
-              <div className="flex items-center justify-between mt-auto pt-2 gap-2">
+              <div className="flex items-center justify-between mt-auto pt-2">
                 <p className="text-primary font-bold text-base md:text-lg">
                   R$ {product.price.toFixed(2).replace('.', ',')}
                 </p>
-                <div className="flex items-center gap-2.5">
-                  <button
-                    onClick={() => setLocation(`/produto/${product.id}`)}
-                    className="text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    Ver detalhes
-                  </button>
-                  <button
-                    onClick={() => addItem({ ...product, quantity: 1 })}
-                    className="text-xs font-semibold text-primary hover:underline underline-offset-2"
-                  >
-                    + Adicionar
-                  </button>
-                </div>
+                <button
+                  onClick={() => addItem({ ...product, quantity: 1 })}
+                  className="text-xs font-semibold text-foreground/60 hover:text-primary transition-colors underline underline-offset-2"
+                >
+                  Adicionar
+                </button>
               </div>
             </motion.div>
           ))}

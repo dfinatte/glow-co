@@ -36,48 +36,6 @@ interface PixResponse {
   notice?: string;
 }
 
-function generateClientPixPayload(
-  key: string,
-  amount: number,
-  name: string = "GLOW AND CO",
-  city: string = "SAO PAULO",
-  txId: string = "***"
-): string {
-  const cleanKey = key.replace(/\D/g, "");
-  const formatField = (id: string, val: string) => `${id}${val.length.toString().padStart(2, "0")}${val}`;
-  const gui = formatField("00", "br.gov.bcb.pix");
-  const keyField = formatField("01", cleanKey);
-  const merchantAccount = formatField("26", `${gui}${keyField}`);
-  const mcc = formatField("52", "0000");
-  const currency = formatField("53", "986");
-  const amountStr = Number(amount).toFixed(2);
-  const amountField = formatField("54", amountStr);
-  const country = formatField("58", "BR");
-  const cleanName = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9 ]/g, "").slice(0, 25).toUpperCase() || "GLOW AND CO";
-  const merchantName = formatField("59", cleanName);
-  const cleanCity = city.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9 ]/g, "").slice(0, 15).toUpperCase() || "SAO PAULO";
-  const merchantCity = formatField("60", cleanCity);
-  const cleanTxId = txId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 25) || "***";
-  const txIdField = formatField("05", cleanTxId);
-  const additionalData = formatField("62", txIdField);
-
-  const rawPayload = `000201${merchantAccount}${mcc}${currency}${amountField}${country}${merchantName}${merchantCity}${additionalData}6304`;
-
-  let crc = 0xFFFF;
-  for (let i = 0; i < rawPayload.length; i++) {
-    crc ^= rawPayload.charCodeAt(i) << 8;
-    for (let j = 0; j < 8; j++) {
-      if ((crc & 0x8000) !== 0) {
-        crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
-      } else {
-        crc = (crc << 1) & 0xFFFF;
-      }
-    }
-  }
-  const crcHex = crc.toString(16).toUpperCase().padStart(4, "0");
-  return `${rawPayload}${crcHex}`;
-}
-
 export default function Checkout() {
   const { cartItems, cartTotal, clearCart } = useCart();
   const [, setLocation] = useLocation();
@@ -111,13 +69,9 @@ export default function Checkout() {
 
     if (orderIdParam) {
       fetch(`/api/mercadopago/payment-status/${orderIdParam}`)
-        .then((res) => {
-          const ct = res.headers.get('content-type') || '';
-          if (res.ok && ct.includes('application/json')) return res.json();
-          return null;
-        })
+        .then((res) => res.json())
         .then((data) => {
-          if (data && data.status === 'approved') {
+          if (data.status === 'approved') {
             setSubmitted(true);
             confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
             clearCart();
@@ -128,19 +82,19 @@ export default function Checkout() {
             clearCart();
           }
         })
-        .catch(() => {});
+        .catch((err) => console.error('Erro ao checar status do retorno MP:', err));
     }
   }, [clearCart]);
 
   // Redirect to store if cart is empty and no active order
   useEffect(() => {
-    if (cartItems.length === 0 && !submitted && !pixData && !cardOrderId && !loading) {
+    if (cartItems.length === 0 && !submitted && !pixData && !cardOrderId) {
       const params = new URLSearchParams(window.location.search);
       if (!params.get('order_id')) {
         setLocation('/');
       }
     }
-  }, [cartItems, setLocation, submitted, pixData, cardOrderId, loading]);
+  }, [cartItems, setLocation, submitted, pixData, cardOrderId]);
 
   // Timer for PIX expiration
   useEffect(() => {
@@ -158,8 +112,7 @@ export default function Checkout() {
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/mercadopago/payment-status/${activeId}`);
-        const ct = res.headers.get('content-type') || '';
-        if (res.ok && ct.includes('application/json')) {
+        if (res.ok) {
           const data = await res.json();
           if (data.status === 'approved') {
             setSubmitted(true);
@@ -168,7 +121,7 @@ export default function Checkout() {
           }
         }
       } catch (err) {
-        // Silently ignore static server response
+        console.error('Erro ao verificar status do pagamento:', err);
       }
     }, 3500);
 
@@ -214,95 +167,71 @@ export default function Checkout() {
       };
 
       if (method === 'pix') {
-        let data: PixResponse | null = null;
-        try {
-          const response = await fetch('/api/mercadopago/create-pix-payment', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              totalAmount: totalToPay,
-              shippingCost,
-              payer: payerData,
-              address: addressData,
-              items: cartItems.map((i) => ({
-                id: i.id,
-                name: i.name,
-                quantity: i.quantity,
-                price: i.price,
-                image: i.image,
-                color: i.color,
-              })),
-            }),
-          });
+        const response = await fetch('/api/mercadopago/create-pix-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            totalAmount: totalToPay,
+            shippingCost,
+            payer: payerData,
+            address: addressData,
+            items: cartItems.map((i) => ({
+              id: i.id,
+              name: i.name,
+              quantity: i.quantity,
+              price: i.price,
+              image: i.image,
+              color: i.color,
+            })),
+          }),
+        });
 
-          const ct = response.headers.get('content-type') || '';
-          if (response.ok && ct.includes('application/json')) {
-            data = await response.json();
-          }
-        } catch (err) {
-          console.warn('Backend API de PIX indisponível, gerando via chave cliente:', err);
+        const data: PixResponse = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.notice || (data as any).error || 'Falha ao comunicar com o Mercado Pago.');
         }
 
-        if (data && data.qr_code) {
-          setPixData(data);
-          if (data.status === 'approved') {
-            setSubmitted(true);
-            confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
-            clearCart();
-          }
-        } else {
-          // Client-side PIX fallback (100% EMV BR Code valid for bank scanners)
-          const orderId = `ord_${Date.now().toString().slice(-6)}`;
-          const pixCode = generateClientPixPayload('55839369837', totalToPay, name || 'GLOW AND CO', 'SAO PAULO', orderId);
-          const fallbackPix: PixResponse = {
-            id: `pix_fallback_${Date.now()}`,
-            orderId,
-            status: 'pending',
-            status_detail: 'waiting_transfer',
-            qr_code: pixCode,
-            pixKey: '55839369837',
-            date_of_expiration: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-          };
-          setPixData(fallbackPix);
-        }
-      } else if (method === 'card') {
-        let data: any = null;
-        try {
-          const response = await fetch('/api/mercadopago/create-preference', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              totalAmount: totalToPay,
-              shippingCost,
-              payer: payerData,
-              address: addressData,
-              items: cartItems.map((i) => ({
-                id: i.id,
-                name: i.name,
-                quantity: i.quantity,
-                price: i.price,
-                image: i.image,
-                color: i.color,
-              })),
-            }),
-          });
-
-          const ct = response.headers.get('content-type') || '';
-          if (response.ok && ct.includes('application/json')) {
-            data = await response.json();
-          }
-        } catch (err) {
-          console.warn('Backend API Mercado Pago Cartão indisponível:', err);
-        }
-
-        if (data && data.init_point) {
-          if (data.orderId) setCardOrderId(data.orderId);
-          window.location.href = data.init_point;
-        } else {
-          // Confirm order directly if static host
+        setPixData(data);
+        if (data.status === 'approved') {
           setSubmitted(true);
           confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
           clearCart();
+        }
+      } else if (method === 'card') {
+        // Redireciona para o Mercado Pago Checkout Pro para pagamentos com cartão
+        const response = await fetch('/api/mercadopago/create-preference', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            totalAmount: totalToPay,
+            shippingCost,
+            payer: payerData,
+            address: addressData,
+            items: cartItems.map((i) => ({
+              id: i.id,
+              name: i.name,
+              quantity: i.quantity,
+              price: i.price,
+              image: i.image,
+              color: i.color,
+            })),
+          }),
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || 'Erro ao gerar o checkout no Mercado Pago.');
+        }
+
+        if (data.orderId) {
+          setCardOrderId(data.orderId);
+        }
+
+        if (data.init_point) {
+          window.location.href = data.init_point;
+        } else {
+          throw new Error('Link de pagamento do Mercado Pago não encontrado.');
         }
       }
     } catch (err: any) {

@@ -123,25 +123,11 @@ export default function Cart() {
                         <div className="space-y-3">
                           {suggestions.map(product => (
                             <div key={product.id} className="flex items-center gap-3 bg-secondary/20 rounded-xl p-3">
-                              <div
-                                className="w-14 h-14 bg-muted rounded-xl overflow-hidden shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
-                                onClick={() => {
-                                  closeCart();
-                                  setLocation(`/produto/${product.id}`);
-                                }}
-                              >
+                              <div className="w-14 h-14 bg-muted rounded-xl overflow-hidden shrink-0">
                                 <img src={product.image} alt={product.name} className="w-full h-full object-cover" />
                               </div>
-                              <div
-                                className="flex-1 min-w-0 cursor-pointer"
-                                onClick={() => {
-                                  closeCart();
-                                  setLocation(`/produto/${product.id}`);
-                                }}
-                              >
-                                <p className="text-xs font-medium text-foreground leading-tight line-clamp-2 hover:text-primary transition-colors">
-                                  {product.name}
-                                </p>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium text-foreground leading-tight line-clamp-2">{product.name}</p>
                                 <p className="text-primary font-bold text-sm mt-1">
                                   R$ {product.price.toFixed(2).replace('.', ',')}
                                 </p>
