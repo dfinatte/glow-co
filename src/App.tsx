@@ -22,6 +22,7 @@ function App() {
               <Route path="/" component={Store} />
               <Route path="/checkout" component={Checkout} />
               <Route path="/admin" component={Admin} />
+              <Route path="/admin/" component={Admin} />
               <Route path="/produto/:id" component={ProductDetail} />
               <Route component={NotFound} />
             </Switch>
