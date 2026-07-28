@@ -12,18 +12,32 @@ import WhatsAppButton from '@/components/WhatsAppButton';
 
 const queryClient = new QueryClient();
 
+const baseUrl = import.meta.env.BASE_URL && import.meta.env.BASE_URL !== '/' 
+  ? import.meta.env.BASE_URL.replace(/\/$/, '') 
+  : undefined;
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <CartProvider>
         <TooltipProvider>
-          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+          <WouterRouter base={baseUrl}>
             <Switch>
               <Route path="/" component={Store} />
               <Route path="/checkout" component={Checkout} />
+              <Route path="/checkout/*" component={Checkout} />
+              <Route path="/carrinho" component={Checkout} />
+              <Route path="/carrinho/*" component={Checkout} />
+              <Route path="/cart" component={Checkout} />
               <Route path="/admin" component={Admin} />
-              <Route path="/admin/" component={Admin} />
+              <Route path="/admin/*" component={Admin} />
+              <Route path="/painel" component={Admin} />
+              <Route path="/painel/*" component={Admin} />
+              <Route path="/dashboard" component={Admin} />
+              <Route path="/dashboard/*" component={Admin} />
               <Route path="/produto/:id" component={ProductDetail} />
+              <Route path="/product/:id" component={ProductDetail} />
+              <Route path="/produtos/:id" component={ProductDetail} />
               <Route component={NotFound} />
             </Switch>
           </WouterRouter>
