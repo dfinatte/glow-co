@@ -18,6 +18,7 @@ import {
   Sparkles,
   PhoneCall,
   MapPin,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
@@ -97,7 +98,13 @@ function updateLocalOrderStatus(orderId: string, status: 'approved' | 'pending' 
   } catch (err) {}
 }
 
-async function createClientMercadoPagoPreference(orderId: string, items: any[], totalAmount: number, payer: any) {
+async function createClientMercadoPagoPreference(
+  orderId: string,
+  items: any[],
+  totalAmount: number,
+  payer: any,
+  shippingCost: number = 0
+) {
   const MP_ACCESS_TOKEN = 'APP_USR-6590395360723241-072718-e5347f510a815f5389bd335e2f462631-1268573698';
 
   const mpItems = items.map((item) => ({
@@ -107,6 +114,16 @@ async function createClientMercadoPagoPreference(orderId: string, items: any[], 
     currency_id: 'BRL',
     unit_price: Number(Number(item.price || 0).toFixed(2)),
   }));
+
+  if (shippingCost > 0) {
+    mpItems.push({
+      id: 'ship_glow',
+      title: 'Frete de Entrega Expressa',
+      quantity: 1,
+      currency_id: 'BRL',
+      unit_price: Number(Number(shippingCost).toFixed(2)),
+    });
+  }
 
   const origin = window.location.origin;
 
@@ -152,27 +169,92 @@ async function createClientMercadoPagoPreference(orderId: string, items: any[], 
 export default function Checkout() {
   const { cartItems, cartTotal, clearCart } = useCart();
   const [, setLocation] = useLocation();
-  const [method, setMethod] = useState<'pix' | 'card'>('pix');
+
+  // Load persisted method & customer form state
+  const [method, setMethod] = useState<'pix' | 'card'>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('glow_checkout_form') || '{}');
+      return saved.method === 'card' ? 'card' : 'pix';
+    } catch { return 'pix'; }
+  });
+
   const [submitted, setSubmitted] = useState(false);
   const [timeLeft, setTimeLeft] = useState(15 * 60);
 
-  // Customer Form State
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [cpf, setCpf] = useState('');
-  const [cep, setCep] = useState('');
-  const [street, setStreet] = useState('');
-  const [number, setNumber] = useState('');
-  const [complement, setComplement] = useState('');
+  // Customer Form State with localStorage persistence
+  const [name, setName] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('glow_checkout_form') || '{}').name || ''; } catch { return ''; }
+  });
+  const [email, setEmail] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('glow_checkout_form') || '{}').email || ''; } catch { return ''; }
+  });
+  const [phone, setPhone] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('glow_checkout_form') || '{}').phone || ''; } catch { return ''; }
+  });
+  const [cpf, setCpf] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('glow_checkout_form') || '{}').cpf || ''; } catch { return ''; }
+  });
+  const [cep, setCep] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('glow_checkout_form') || '{}').cep || ''; } catch { return ''; }
+  });
+  const [street, setStreet] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('glow_checkout_form') || '{}').street || ''; } catch { return ''; }
+  });
+  const [number, setNumber] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('glow_checkout_form') || '{}').number || ''; } catch { return ''; }
+  });
+  const [complement, setComplement] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('glow_checkout_form') || '{}').complement || ''; } catch { return ''; }
+  });
 
   // Mercado Pago API States
   const [loading, setLoading] = useState(false);
-  const [pixData, setPixData] = useState<PixResponse | null>(null);
+  const [pixData, setPixData] = useState<PixResponse | null>(() => {
+    try {
+      const saved = localStorage.getItem('glow_active_pix');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.date_of_expiration && new Date(parsed.date_of_expiration).getTime() > Date.now()) {
+          return parsed;
+        } else {
+          localStorage.removeItem('glow_active_pix');
+        }
+      }
+    } catch {}
+    return null;
+  });
+
   const [copiedPixCode, setCopiedPixCode] = useState(false);
   const [copiedPixKey, setCopiedPixKey] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [cardOrderId, setCardOrderId] = useState<string | null>(null);
+
+  // Automatically save customer form state when edited
+  useEffect(() => {
+    try {
+      localStorage.setItem('glow_checkout_form', JSON.stringify({
+        name, email, phone, cpf, cep, street, number, complement, method
+      }));
+    } catch (err) {}
+  }, [name, email, phone, cpf, cep, street, number, complement, method]);
+
+  // Save active PIX order state
+  useEffect(() => {
+    if (pixData) {
+      try {
+        localStorage.setItem('glow_active_pix', JSON.stringify(pixData));
+      } catch {}
+    } else {
+      try {
+        localStorage.removeItem('glow_active_pix');
+      } catch {}
+    }
+  }, [pixData]);
+
+  // Shipping & Totals calculation
+  const shippingCost = cartTotal >= 200 || cartTotal === 0 ? 0 : 15.90;
+  const pixDiscount = method === 'pix' ? cartTotal * 0.05 : 0;
+  const finalTotal = cartTotal - pixDiscount + shippingCost;
 
   // Check URL search params for Mercado Pago callbacks
   useEffect(() => {
@@ -224,27 +306,48 @@ export default function Checkout() {
     }
   }, [pixData]);
 
-  // Poll status every 3.5s for pending orders (both PIX and Card)
+  // Poll status every 2.5s for pending orders (both local Admin approvals and backend)
   useEffect(() => {
     const activeId = pixData?.orderId || pixData?.id || cardOrderId;
     if (!activeId || submitted) return;
 
     const interval = setInterval(async () => {
+      // 1. Check local order status (e.g. approved in Admin panel)
+      try {
+        const savedOrders = localStorage.getItem('glow_orders');
+        if (savedOrders) {
+          const orders = JSON.parse(savedOrders);
+          const matchedOrder = orders.find(
+            (o: any) => o.id === activeId || o.id === pixData?.orderId || o.id === pixData?.id
+          );
+          if (matchedOrder && matchedOrder.paymentStatus === 'approved') {
+            setSubmitted(true);
+            confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
+            clearCart();
+            localStorage.removeItem('glow_active_pix');
+            return;
+          }
+        }
+      } catch (err) {}
+
+      // 2. Check server status if endpoint available
       try {
         const res = await fetch(`/api/mercadopago/payment-status/${activeId}`);
         const ct = res.headers.get('content-type') || '';
         if (res.ok && ct.includes('application/json')) {
           const data = await res.json();
           if (data.status === 'approved') {
+            updateLocalOrderStatus(activeId, 'approved');
             setSubmitted(true);
             confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
             clearCart();
+            localStorage.removeItem('glow_active_pix');
           }
         }
       } catch (err) {
         // Silently ignore static server response
       }
-    }, 3500);
+    }, 2500);
 
     return () => clearInterval(interval);
   }, [pixData, cardOrderId, submitted, clearCart]);
@@ -264,13 +367,32 @@ export default function Checkout() {
     setCpf(formatted);
   };
 
+  const handleCepChange = async (val: string) => {
+    const rawCep = val.replace(/\D/g, '').slice(0, 8);
+    const formatted = rawCep.length > 5 ? `${rawCep.slice(0, 5)}-${rawCep.slice(5)}` : rawCep;
+    setCep(formatted);
+
+    if (rawCep.length === 8) {
+      try {
+        const res = await fetch(`https://viacep.com.br/ws/${rawCep}/json/`);
+        if (res.ok) {
+          const data = await res.json();
+          if (!data.erro) {
+            if (data.logradouro) setStreet(data.logradouro);
+            if (data.complemento && !complement) setComplement(data.complemento);
+          }
+        }
+      } catch (err) {}
+    }
+  };
+
   const handleCheckout = async (e: React.FormEvent) => {
     e.preventDefault();
     setPaymentError(null);
     setLoading(true);
 
     try {
-      const shippingCost = cartTotal >= 200 ? 0 : 15.9;
+      const shippingCost = cartTotal >= 200 || cartTotal === 0 ? 0 : 15.90;
       const totalToPay = (method === 'pix' ? cartTotal * 0.95 : cartTotal) + shippingCost;
 
       const payerData = {
@@ -288,36 +410,7 @@ export default function Checkout() {
       };
 
       if (method === 'pix') {
-        let data: PixResponse | null = null;
-        try {
-          const response = await fetch('/api/mercadopago/create-pix-payment', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              totalAmount: totalToPay,
-              shippingCost,
-              payer: payerData,
-              address: addressData,
-              items: cartItems.map((i) => ({
-                id: i.id,
-                name: i.name,
-                quantity: i.quantity,
-                price: i.price,
-                image: i.image,
-                color: i.color,
-              })),
-            }),
-          });
-
-          const ct = response.headers.get('content-type') || '';
-          if (response.ok && ct.includes('application/json')) {
-            data = await response.json();
-          }
-        } catch (err) {
-          console.warn('Backend API de PIX indisponível, usando gerador PIX cliente:', err);
-        }
-
-        const orderId = data?.orderId || `ord_${Date.now().toString().slice(-6)}`;
+        const orderId = `ord_${Date.now().toString().slice(-6)}`;
         
         saveOrderLocally({
           id: orderId,
@@ -334,31 +427,24 @@ export default function Checkout() {
           })),
           totalAmount: totalToPay,
           paymentMethod: 'pix',
-          paymentStatus: data?.status === 'approved' ? 'approved' : 'pending',
+          paymentStatus: 'pending',
           pixKeyUsed: '55839369837',
         });
 
-        if (data && data.qr_code) {
-          setPixData(data);
-          if (data.status === 'approved') {
-            setSubmitted(true);
-            confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
-            clearCart();
-          }
-        } else {
-          // Client-side PIX fallback (100% EMV BR Code valid for bank scanners)
-          const pixCode = generateClientPixPayload('55839369837', totalToPay, name || 'GLOW AND CO', 'SAO PAULO', orderId);
-          const fallbackPix: PixResponse = {
-            id: `pix_fallback_${Date.now()}`,
-            orderId,
-            status: 'pending',
-            status_detail: 'waiting_transfer',
-            qr_code: pixCode,
-            pixKey: '55839369837',
-            date_of_expiration: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-          };
-          setPixData(fallbackPix);
-        }
+        // Direct Client-side PIX Payload (100% valid EMV BR Code)
+        const pixCode = generateClientPixPayload('55839369837', totalToPay, name || 'GLOW AND CO', 'SAO PAULO', orderId);
+        const directPix: PixResponse = {
+          id: `pix_${orderId}`,
+          orderId,
+          status: 'pending',
+          status_detail: 'waiting_transfer',
+          qr_code: pixCode,
+          pixKey: '55839369837',
+          date_of_expiration: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+        };
+
+        setPixData(directPix);
+        setTimeLeft(15 * 60);
       } else if (method === 'card') {
         const orderId = `ORD-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
 
@@ -389,7 +475,8 @@ export default function Checkout() {
             orderId,
             cartItems,
             totalToPay,
-            payerData
+            payerData,
+            shippingCost
           );
         } catch (clientMpErr) {
           console.warn('Erro ao chamar Mercado Pago diretamente, tentando backend local:', clientMpErr);
@@ -504,9 +591,6 @@ export default function Checkout() {
     );
   }
 
-  const shippingCost = cartTotal >= 200 ? 0 : 15.9;
-  const finalTotal = (method === 'pix' ? cartTotal * 0.95 : cartTotal) + shippingCost;
-
   return (
     <div className="min-h-[100dvh] bg-muted/20 w-full md:py-12">
       <div className="max-w-5xl mx-auto md:grid md:grid-cols-12 md:gap-8 bg-card md:rounded-[2.5rem] md:shadow-2xl overflow-hidden border border-border/80">
@@ -541,7 +625,7 @@ export default function Checkout() {
               className="bg-card border-2 border-primary/30 p-6 rounded-3xl text-center space-y-6 shadow-xl"
             >
               <div className="inline-flex items-center gap-2 bg-primary/10 text-primary px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider">
-                <QrCode className="w-4 h-4" /> Pagamento via PIX Mercado Pago
+                <QrCode className="w-4 h-4" /> Pagamento via PIX - Desconto de 5%
               </div>
 
               <div>
@@ -558,6 +642,7 @@ export default function Checkout() {
                     <PhoneCall className="w-4 h-4 text-primary" /> Chave PIX (Celular):
                   </span>
                   <button
+                    type="button"
                     onClick={handleCopyPixKey}
                     className="bg-primary text-primary-foreground px-3 py-1 rounded-lg text-xs font-bold hover:bg-primary/90 transition-all flex items-center gap-1"
                   >
@@ -575,7 +660,7 @@ export default function Checkout() {
                 {pixData.qr_code_base64 && pixData.qr_code_base64.length > 200 ? (
                   <img
                     src={pixData.qr_code_base64.startsWith('data:') ? pixData.qr_code_base64 : `data:image/png;base64,${pixData.qr_code_base64}`}
-                    alt="QR Code PIX Mercado Pago"
+                    alt="QR Code PIX"
                     className="w-full h-full object-contain"
                     referrerPolicy="no-referrer"
                   />
@@ -602,6 +687,7 @@ export default function Checkout() {
                     className="w-full text-xs p-3.5 bg-muted rounded-xl border border-border font-mono text-muted-foreground truncate outline-none select-all"
                   />
                   <button
+                    type="button"
                     onClick={handleCopyPixCode}
                     className="bg-primary text-primary-foreground px-4 rounded-xl font-bold text-xs hover:bg-primary/90 transition-all flex items-center gap-1.5 shrink-0"
                   >
@@ -611,29 +697,27 @@ export default function Checkout() {
                 </div>
               </div>
 
-              {/* Live Polling Status & Manual Confirmation */}
+              {/* Live Polling Status & Cancel / Change Method Button */}
               <div className="pt-4 border-t border-border flex flex-col items-center gap-3">
                 <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
                   <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
-                  Aguardando transferência do PIX...
+                  Aguardando confirmação do pagamento...
                 </div>
-                <button
-                  onClick={() => {
-                    if (pixData?.orderId || pixData?.id) {
-                      updateLocalOrderStatus(pixData.orderId || pixData.id, 'approved');
-                    }
-                    setSubmitted(true);
-                    confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
-                    clearCart();
-                  }}
-                  className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3.5 px-4 rounded-xl text-xs transition-all shadow-md flex items-center justify-center gap-2"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  Já fiz o pagamento via PIX
-                </button>
-                <p className="text-[11px] text-muted-foreground/80 text-center">
-                  Após realizar o PIX no seu banco, clique no botão acima para visualizar o comprovante e confirmação do pedido.
+                <p className="text-[11px] text-muted-foreground/80 text-center leading-relaxed">
+                  Assim que a transferência for realizada no app do seu banco e confirmada no sistema, esta página será atualizada automaticamente com os parabéns e confirmação da compra.
                 </p>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPixData(null);
+                    localStorage.removeItem('glow_active_pix');
+                  }}
+                  className="w-full mt-2 bg-muted hover:bg-muted/80 text-foreground font-bold py-3.5 px-4 rounded-xl text-xs transition-all border border-border flex items-center justify-center gap-2"
+                >
+                  <ArrowLeftRight className="w-4 h-4 text-primary" />
+                  Alterar Forma de Pagamento / Cancelar Pedido
+                </button>
               </div>
             </motion.div>
           ) : (
@@ -689,8 +773,8 @@ export default function Checkout() {
                       required
                       type="text"
                       value={cep}
-                      onChange={(e) => setCep(e.target.value)}
-                      placeholder="CEP"
+                      onChange={(e) => handleCepChange(e.target.value)}
+                      placeholder="CEP (Busca Automática)"
                       className="w-1/3 p-4 border border-border/80 rounded-xl bg-background focus:ring-2 focus:ring-primary/50 outline-none transition-all placeholder:text-muted-foreground/70 text-sm"
                     />
                     <input
@@ -718,6 +802,19 @@ export default function Checkout() {
                       placeholder="Complemento (Apto, Bloco)"
                       className="w-full col-span-2 p-4 border border-border/80 rounded-xl bg-background focus:ring-2 focus:ring-primary/50 outline-none transition-all placeholder:text-muted-foreground/70 text-sm"
                     />
+                  </div>
+
+                  {/* Shipping Cost Badge */}
+                  <div className="bg-primary/5 p-3.5 rounded-xl border border-primary/20 text-xs flex items-center justify-between font-medium">
+                    <div className="flex items-center gap-2 text-foreground">
+                      <MapPin className="w-4 h-4 text-primary shrink-0" />
+                      <span>
+                        {cartTotal >= 200 ? 'Frete Grátis ativado (compras acima de R$ 200,00)' : 'Entrega Expressa Correios / Sedex (3 a 5 dias úteis)'}
+                      </span>
+                    </div>
+                    <span className="font-bold text-primary shrink-0">
+                      {cartTotal >= 200 ? 'GRÁTIS' : 'R$ 15,90'}
+                    </span>
                   </div>
                 </div>
               </div>

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 
 export type CartItem = {
   id: string;
@@ -14,6 +14,7 @@ type CartContextType = {
   addItem: (item: Omit<CartItem, 'quantity'> & { quantity?: number }) => void;
   removeItem: (id: string) => void;
   updateQuantity: (id: string, qty: number) => void;
+  clearCart: () => void;
   cartTotal: number;
   isCartOpen: boolean;
   openCart: () => void;
@@ -23,8 +24,23 @@ type CartContextType = {
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
-  const [cartItems, setCartItems] = useState<CartItem[]>([]);
+  const [cartItems, setCartItems] = useState<CartItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('glow_cart');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [isCartOpen, setIsCartOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('glow_cart', JSON.stringify(cartItems));
+    } catch (e) {
+      console.error('Erro ao salvar carrinho no localStorage:', e);
+    }
+  }, [cartItems]);
 
   const addItem = (item: Omit<CartItem, 'quantity'> & { quantity?: number }) => {
     setCartItems(prev => {
@@ -45,13 +61,20 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setCartItems(prev => prev.map(i => i.id === id ? { ...i, quantity: Math.max(1, qty) } : i));
   };
 
+  const clearCart = () => {
+    setCartItems([]);
+    try {
+      localStorage.removeItem('glow_cart');
+    } catch {}
+  };
+
   const cartTotal = useMemo(() => cartItems.reduce((acc, item) => acc + item.price * item.quantity, 0), [cartItems]);
 
   const openCart = () => setIsCartOpen(true);
   const closeCart = () => setIsCartOpen(false);
 
   return (
-    <CartContext.Provider value={{ cartItems, addItem, removeItem, updateQuantity, cartTotal, isCartOpen, openCart, closeCart }}>
+    <CartContext.Provider value={{ cartItems, addItem, removeItem, updateQuantity, clearCart, cartTotal, isCartOpen, openCart, closeCart }}>
       {children}
     </CartContext.Provider>
   );
