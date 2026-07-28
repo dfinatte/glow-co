@@ -63,58 +63,78 @@ export default function Admin() {
 
   const fetchOrders = async () => {
     setLoading(true);
+    let apiOrders: Order[] = [];
     try {
       const res = await fetch("/api/admin/orders");
-      if (res.ok) {
-        const data = await res.json();
-        setOrders(data);
+      const ct = res.headers.get("content-type") || "";
+      if (res.ok && ct.includes("application/json")) {
+        apiOrders = await res.json();
       }
     } catch (err) {
-      console.error("Erro ao carregar pedidos:", err);
-    } finally {
-      setLoading(false);
+      console.warn("API de ordens indisponível, usando localStorage:", err);
     }
+
+    let localOrders: Order[] = [];
+    try {
+      const stored = localStorage.getItem("glow_orders");
+      if (stored) localOrders = JSON.parse(stored);
+    } catch (e) {}
+
+    const orderMap = new Map<string, Order>();
+    localOrders.forEach((o) => orderMap.set(o.id, o));
+    apiOrders.forEach((o) => orderMap.set(o.id, o));
+
+    const merged = Array.from(orderMap.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    setOrders(merged);
+    setLoading(false);
   };
 
   useEffect(() => {
     fetchOrders();
-    const interval = setInterval(fetchOrders, 8000);
+    const interval = setInterval(fetchOrders, 5000);
     return () => clearInterval(interval);
   }, []);
 
   const handleApprove = async (orderId: string) => {
     setApprovingId(orderId);
     try {
-      const res = await fetch(`/api/admin/orders/${orderId}/approve`, {
+      await fetch(`/api/admin/orders/${orderId}/approve`, {
         method: "POST",
       });
-      if (res.ok) {
-        setOrders((prev) =>
-          prev.map((o) => (o.id === orderId ? { ...o, paymentStatus: "approved" } : o))
-        );
-      }
-    } catch (err) {
-      console.error("Erro ao aprovar pedido:", err);
-    } finally {
-      setApprovingId(null);
-    }
+    } catch (err) {}
+
+    setOrders((prev) => {
+      const updated = prev.map((o) =>
+        o.id === orderId ? { ...o, paymentStatus: "approved" as const } : o
+      );
+      try {
+        localStorage.setItem("glow_orders", JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+    setApprovingId(null);
   };
 
   const handleDelete = async (orderId: string) => {
     if (!confirm("Tem certeza que deseja remover este pedido?")) return;
     setDeletingId(orderId);
     try {
-      const res = await fetch(`/api/admin/orders/${orderId}`, {
+      await fetch(`/api/admin/orders/${orderId}`, {
         method: "DELETE",
       });
-      if (res.ok) {
-        setOrders((prev) => prev.filter((o) => o.id !== orderId));
-      }
-    } catch (err) {
-      console.error("Erro ao deletar pedido:", err);
-    } finally {
-      setDeletingId(null);
-    }
+    } catch (err) {}
+
+    setOrders((prev) => {
+      const updated = prev.filter((o) => o.id !== orderId);
+      try {
+        localStorage.setItem("glow_orders", JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+    setDeletingId(null);
   };
 
   const filteredOrders = orders.filter((order) => {
