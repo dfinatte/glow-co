@@ -298,11 +298,10 @@ export default function Checkout() {
         if (data && data.init_point) {
           if (data.orderId) setCardOrderId(data.orderId);
           window.location.href = data.init_point;
+        } else if (data && data.error) {
+          setPaymentError(data.error);
         } else {
-          // Confirm order directly if static host
-          setSubmitted(true);
-          confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
-          clearCart();
+          setPaymentError('Servidor do Mercado Pago indisponível para Cartão. Por favor, utilize a opção PIX para gerar o QR Code com 5% de desconto e aprovação instantânea!');
         }
       }
     } catch (err: any) {
@@ -480,14 +479,25 @@ export default function Checkout() {
                 </div>
               </div>
 
-              {/* Live Polling Status */}
-              <div className="pt-4 border-t border-border flex flex-col items-center gap-2">
+              {/* Live Polling Status & Manual Confirmation */}
+              <div className="pt-4 border-t border-border flex flex-col items-center gap-3">
                 <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
                   <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
-                  Aguardando confirmação do pagamento...
+                  Aguardando transferência do PIX...
                 </div>
-                <p className="text-[11px] text-muted-foreground/80">
-                  Assim que o pagamento for realizado ou aprovado no painel ADM, esta tela atualizará automaticamente!
+                <button
+                  onClick={() => {
+                    setSubmitted(true);
+                    confetti({ particleCount: 140, spread: 80, origin: { y: 0.6 } });
+                    clearCart();
+                  }}
+                  className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3.5 px-4 rounded-xl text-xs transition-all shadow-md flex items-center justify-center gap-2"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  Já fiz o pagamento via PIX
+                </button>
+                <p className="text-[11px] text-muted-foreground/80 text-center">
+                  Após realizar o PIX no seu banco, clique no botão acima para visualizar o comprovante e confirmação do pedido.
                 </p>
               </div>
             </motion.div>
